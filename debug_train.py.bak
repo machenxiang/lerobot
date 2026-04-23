@@ -1,0 +1,48 @@
+"""
+Debug script for SmolVLA training on LIBERO
+Usage: F5 (VSCode) or python debug_train.py
+Then use debugger to set breakpoints and step through.
+"""
+
+import os
+import sys
+
+# Set environment variables BEFORE importing anything else
+os.environ["HF_TOKEN"] = "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"
+os.environ["PYTHONPATH"] = "/home/mcx/LIBERO:" + os.environ.get("PYTHONPATH", "")
+os.environ["MUJOCO_GL"] = "egl"
+
+# 完全离线模式
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["HF_DATASETS_OFFLINE"] = "1"
+os.environ.pop("HF_ENDPOINT", None)  # 清除镜像设置
+
+# Print debug info
+print("Debug mode: Starting training config...")
+print(f"Python: {sys.executable}")
+print(f"Working directory: {os.getcwd()}")
+print(f"PYTHONPATH: {os.environ.get('PYTHONPATH', '')}")
+
+# Import and run - uses @parser.wrap() to parse args
+if __name__ == "__main__":
+    from lerobot.scripts.lerobot_train import main
+
+    # Hardcoded args matching the training command:
+    sys.argv = [
+        "debug_train.py",  # argv[0] is the script name
+        "--policy.path=lerobot/smolvla_base",
+        "--policy.repo_id=mcx/smolvla_libero",
+        "--policy.use_amp=true",
+        "--dataset.repo_id=HuggingFaceVLA/libero",
+        "--dataset.root=/home/mcx/.cache/huggingface/lerobot/HuggingFaceVLA/libero",
+        "--batch_size=8",
+        "--steps=20000",
+        "--eval_freq=500",
+        "--eval.n_episodes=10",
+        "--eval.batch_size=10",
+        "--output_dir=outputs/smolvla_libero_finetune",
+        """--rename_map={"observation.images.image": "observation.images.camera1", "observation.images.image2": "observation.images.camera2"}""",
+    ]
+
+    print(f"Arguments: {sys.argv[1:]}")
+    main()

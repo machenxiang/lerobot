@@ -1,0 +1,27 @@
+# Evaluation config for LIBERO with SmolVLA
+
+output_dir: outputs/eval_libero_smolvla
+
+env:
+  type: libero
+  name: libero_sim_pickplace
+  task_suite_name: libero_spatial
+  headless: true
+  enable_cameras: true
+  camera_width: 256
+  camera_height: 256
+  video: true
+  video_length: 200
+
+eval:
+  n_episodes: 10
+  batch_size: 1
+  use_async_envs: false
+
+policy:
+  type: smolvla
+  path: /home/mcx/lerobot/outputs/smolvla_libero_finetune/checkpoints/002000/pretrained_model
+  device: cuda
+  use_amp: false
+
+seed: 7
