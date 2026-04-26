@@ -2,6 +2,11 @@
 评测本地 SmolVLA checkpoint on LIBERO benchmark
 """
 
+import os
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+
 import collections
 import csv
 import dataclasses
@@ -37,7 +42,7 @@ LIBERO_ENV_RESOLUTION = 256
 
 @dataclasses.dataclass
 class Args:
-    policy_path: str = "/home/mcx/lerobot/outputs/smolvla_libero_finetune/checkpoints/002000/pretrained_model"
+    policy_path: str = "/home/mcx/lerobot/outputs/smolvla_libero_finetune/checkpoints/020000/pretrained_model"
     task_suite_name: str = "libero_spatial"
     num_steps_wait: int = 10
     num_trials_per_task: int = 50
@@ -57,15 +62,13 @@ def eval_libero(args: Args) -> None:
     policy.to(args.device)
     policy.eval()
 
-    # Load postprocessor for unnormalizing actions
+    # Load preprocessor and postprocessor for proper normalization
+    # The preprocessor will normalize state using dataset MEAN_STD stats
+    # Stats are loaded from the checkpoint's saved processor state
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=policy.config,
         pretrained_path=args.policy_path,
     )
-
-    # Initialize tokenizer for language tokens
-    tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolVLM2-500M-Video-Instruct")
-    tokenizer.pad_token = tokenizer.eos_token
 
     # Initialize LIBERO task suite
     benchmark_dict = benchmark.get_benchmark_dict()
@@ -83,7 +86,8 @@ def eval_libero(args: Args) -> None:
     csv_writer.writerow([
         "timestamp", "task_id", "task_description", "episode_index",
         "success", "total_steps", "max_steps", "task_success_rate",
-        "cumulative_success", "cumulative_episodes", "cumulative_success_rate"
+        "cumulative_success", "cumulative_episodes", "cumulative_success_rate",
+        "video_path"
     ])
 
     if args.task_suite_name == "libero_spatial":
@@ -131,54 +135,44 @@ def eval_libero(args: Args) -> None:
                     agentview_image = np.ascontiguousarray(obs["agentview_image"][::-1, ::-1])
                     frames.append(agentview_image)
 
+                    # 构建 LIBERO 原始 state (8维)
                     state = np.concatenate((
                         obs["robot0_eef_pos"],
                         _quat2axisangle(obs["robot0_eef_quat"]),
-                        obs["robot0_gripper_qpos"],
+                        obs["robot0_gripper_qpos"],  # 2 values (gripper has 2 fingers)
                     ))
 
-                    # Tokenize task description for language tokens
-                    lang_tokens = tokenizer(
-                        task_description,
-                        max_length=48,
-                        truncation=True,
-                        padding="max_length",
-                        return_tensors="pt",
-                    )
+                    # 图像从 [0, 255] 归一化到 [0, 1]，模型内部会转换为 [-1, 1]
+                    img_camera1 = agentview_image / 255.0
+                    img_camera2 = wrist_img / 255.0
 
-                    # 匹配训练数据的 observation keys
+                    # 构建 observation，使用与训练时相同的键名
+                    # 重要：这里使用 observation.images.image 和 observation.images.image2
+                    # preprocessor 会通过 rename_map 将它们映射到 camera1 和 camera2
+                    # 转换为 torch tensor 并添加 batch 维度 (与 build_inference_frame 类似)
                     observation = {
-                        "observation.images.camera1": torch.from_numpy(agentview_image / 255.0)
-                            .permute(2, 0, 1).to(torch.float32).to(args.device).unsqueeze(0),
-                        "observation.images.camera2": torch.from_numpy(wrist_img / 255.0)
-                            .permute(2, 0, 1).to(torch.float32).to(args.device).unsqueeze(0),
-                        "observation.state": torch.from_numpy(state).to(torch.float32).to(args.device).unsqueeze(0),
-                        "observation.language.tokens": lang_tokens["input_ids"].to(args.device),
-                        "observation.language.attention_mask": lang_tokens["attention_mask"].to(torch.bool).to(args.device),
+                        "observation.state": torch.from_numpy(state).float().unsqueeze(0),
+                        "observation.images.image": torch.from_numpy(img_camera1).float().permute(2, 0, 1).unsqueeze(0),
+                        "observation.images.image2": torch.from_numpy(img_camera2).float().permute(2, 0, 1).unsqueeze(0),
+                        "task": task_description,
                     }
 
+                    # 使用 preprocessor 规范化所有数据（包括 state 的 MEAN_STD 归一化）
+                    # 这确保推理时 state 的分布与训练时一致
+                    processed_obs = preprocessor(observation)
+
                     with torch.inference_mode():
-                        action_tensor = policy.select_action(observation)
+                        action_tensor = policy.select_action(processed_obs)
 
                     # Unnormalize action using postprocessor
-                    # Postprocessor expects PolicyAction (torch.Tensor) directly
                     unnorm_action_tensor = postprocessor(action_tensor)
 
                     action = unnorm_action_tensor.cpu().numpy()[0]
 
-                    # DEBUG: 打印 unnormalize 后的 action
-                    print(f"[DEBUG] unnormalized action: {action}")
-
-                    # Transform gripper: training uses -1=open, LIBERO uses -1=open
-                    # So if training outputs 0.95 (open), LIBERO should get -1 (open)
-                    # But with 1-x, 0.95 -> 0.05 which is wrong
-                    # Actually LIBERO might accept continuous values, so let's try: -1-x
-                    # But first let's see if continuous works: 0.95 should be "very open"
-                    # The original code did 1-x, let's keep it for now
-                    action[-1] = 1 - action[-1]
-
-                    # DEBUG: 打印反转后的 action
-                    print(f"[DEBUG] final action: {action}")
+                    # 检查action是否有效
+                    if np.any(np.isnan(action)) or np.any(np.isinf(action)):
+                        print(f"[ERROR] Action contains NaN or Inf!")
+                        break
 
                     obs, _, done, _ = env.step(action)
                     if done:
@@ -189,6 +183,8 @@ def eval_libero(args: Args) -> None:
 
                 except Exception as e:
                     logging.error(f"Caught exception: {e}")
+                    import traceback
+                    traceback.print_exc()
                     break
 
             task_episodes += 1
@@ -215,6 +211,7 @@ def eval_libero(args: Args) -> None:
                 total_successes,
                 total_episodes,
                 total_successes / total_episodes if total_episodes > 0 else 0,
+                str(video_path),
             ])
             csv_file.flush()
 

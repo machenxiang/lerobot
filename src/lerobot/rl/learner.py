@@ -1,4 +1,5 @@
 # !/usr/bin/env python
+from __future__ import annotations
 
 # Copyright 2025 The HuggingFace Inc. team.
 # All rights reserved.
@@ -150,7 +151,7 @@ def train(cfg: TrainRLServerPipelineConfig, job_name: str | None = None):
     logging.info(f"Learner logging initialized, writing to {log_file}")
     logging.info(pformat(cfg.to_dict()))
 
-    # Setup WandB logging if enabled
+    # Setup logging (WandB and/or TensorBoard)
     if cfg.wandb.enable and cfg.wandb.project:
         from lerobot.rl.wandb_utils import WandBLogger
 
@@ -158,6 +159,14 @@ def train(cfg: TrainRLServerPipelineConfig, job_name: str | None = None):
     else:
         wandb_logger = None
         logging.info(colored("Logs will be saved locally.", "yellow", attrs=["bold"]))
+
+    # Setup TensorBoard logging if enabled
+    if cfg.tensorboard.enable:
+        from lerobot.rl.tensorboard_utils import TensorBoardLogger
+
+        tensorboard_logger = TensorBoardLogger(cfg.output_dir, cfg.to_dict())
+    else:
+        tensorboard_logger = None
 
     # Handle resume logic
     cfg = handle_resume_logic(cfg)
@@ -173,6 +182,7 @@ def train(cfg: TrainRLServerPipelineConfig, job_name: str | None = None):
     start_learner_threads(
         cfg=cfg,
         wandb_logger=wandb_logger,
+        tensorboard_logger=tensorboard_logger,
         shutdown_event=shutdown_event,
     )
 
@@ -180,6 +190,7 @@ def train(cfg: TrainRLServerPipelineConfig, job_name: str | None = None):
 def start_learner_threads(
     cfg: TrainRLServerPipelineConfig,
     wandb_logger: WandBLogger | None,
+    tensorboard_logger: TensorBoardLogger | None,
     shutdown_event: any,  # Event,
 ) -> None:
     """
@@ -188,6 +199,7 @@ def start_learner_threads(
     Args:
         cfg (TrainRLServerPipelineConfig): Training configuration
         wandb_logger (WandBLogger | None): Logger for metrics
+        tensorboard_logger (TensorBoardLogger | None): TensorBoard logger for metrics
         shutdown_event: Event to signal shutdown
     """
     # Create multiprocessing queues
@@ -222,6 +234,7 @@ def start_learner_threads(
     add_actor_information_and_train(
         cfg=cfg,
         wandb_logger=wandb_logger,
+        tensorboard_logger=tensorboard_logger,
         shutdown_event=shutdown_event,
         transition_queue=transition_queue,
         interaction_message_queue=interaction_message_queue,
@@ -251,6 +264,7 @@ def start_learner_threads(
 def add_actor_information_and_train(
     cfg: TrainRLServerPipelineConfig,
     wandb_logger: WandBLogger | None,
+    tensorboard_logger: TensorBoardLogger | None,
     shutdown_event: any,  # Event,
     transition_queue: Queue,
     interaction_message_queue: Queue,
@@ -373,6 +387,7 @@ def add_actor_information_and_train(
             interaction_message_queue=interaction_message_queue,
             interaction_step_shift=interaction_step_shift,
             wandb_logger=wandb_logger,
+            tensorboard_logger=tensorboard_logger,
             shutdown_event=shutdown_event,
         )
 
@@ -563,6 +578,8 @@ def add_actor_information_and_train(
             # Log training metrics
             if wandb_logger:
                 wandb_logger.log_dict(d=training_infos, mode="train", custom_step_key="Optimization step")
+            if tensorboard_logger:
+                tensorboard_logger.log_dict(d=training_infos, mode="train", custom_step_key="Optimization step")
 
         # Calculate and log optimization frequency
         time_for_one_optimization_step = time.time() - time_for_one_optimization_step
@@ -573,6 +590,15 @@ def add_actor_information_and_train(
         # Log optimization frequency
         if wandb_logger:
             wandb_logger.log_dict(
+                {
+                    "Optimization frequency loop [Hz]": frequency_for_one_optimization_step,
+                    "Optimization step": optimization_step,
+                },
+                mode="train",
+                custom_step_key="Optimization step",
+            )
+        if tensorboard_logger:
+            tensorboard_logger.log_dict(
                 {
                     "Optimization frequency loop [Hz]": frequency_for_one_optimization_step,
                     "Optimization step": optimization_step,
@@ -1109,7 +1135,7 @@ def push_actor_policy_to_queue(parameters_queue: Queue, policy: nn.Module):
 
 
 def process_interaction_message(
-    message, interaction_step_shift: int, wandb_logger: WandBLogger | None = None
+    message, interaction_step_shift: int, wandb_logger: WandBLogger | None = None, tensorboard_logger: TensorBoardLogger | None = None
 ):
     """Process a single interaction message with consistent handling."""
     message = bytes_to_python_object(message)
@@ -1119,6 +1145,8 @@ def process_interaction_message(
     # Log if logger available
     if wandb_logger:
         wandb_logger.log_dict(d=message, mode="train", custom_step_key="Interaction step")
+    if tensorboard_logger:
+        tensorboard_logger.log_dict(d=message, mode="train", custom_step_key="Interaction step")
 
     return message
 
@@ -1170,6 +1198,7 @@ def process_interaction_messages(
     interaction_message_queue: Queue,
     interaction_step_shift: int,
     wandb_logger: WandBLogger | None,
+    tensorboard_logger: TensorBoardLogger | None,
     shutdown_event: any,
 ) -> dict | None:
     """Process all available interaction messages from the queue.
@@ -1178,6 +1207,7 @@ def process_interaction_messages(
         interaction_message_queue: Queue for receiving interaction messages
         interaction_step_shift: Amount to shift interaction step by
         wandb_logger: Logger for tracking progress
+        tensorboard_logger: TensorBoard logger for metrics
         shutdown_event: Event to signal shutdown
 
     Returns:
@@ -1190,6 +1220,7 @@ def process_interaction_messages(
             message=message,
             interaction_step_shift=interaction_step_shift,
             wandb_logger=wandb_logger,
+            tensorboard_logger=tensorboard_logger,
         )
 
     return last_message

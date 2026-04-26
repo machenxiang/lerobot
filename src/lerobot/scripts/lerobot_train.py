@@ -204,6 +204,13 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         if is_main_process:
             logging.info(colored("Logs will be saved locally.", "yellow", attrs=["bold"]))
 
+    # Initialize TensorBoard logger only on main process
+    if cfg.tensorboard.enable and is_main_process:
+        from lerobot.rl.tensorboard_utils import TensorBoardLogger
+        tensorboard_logger = TensorBoardLogger(cfg.output_dir, cfg.to_dict())
+    else:
+        tensorboard_logger = None
+
     if cfg.seed is not None:
         set_seed(cfg.seed, accelerator=accelerator)
 
@@ -464,6 +471,20 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                         }
                     )
                 wandb_logger.log_dict(wandb_log_dict, step)
+            if tensorboard_logger:
+                tb_log_dict = train_tracker.to_dict()
+                if output_dict:
+                    tb_log_dict.update(output_dict)
+                # Log RA-BC statistics if enabled
+                if rabc_weights is not None:
+                    tb_log_dict.update(
+                        {
+                            "rabc_delta_mean": rabc_stats["delta_mean"],
+                            "rabc_delta_std": rabc_stats["delta_std"],
+                            "rabc_num_frames": rabc_stats["num_frames"],
+                        }
+                    )
+                tensorboard_logger.log_dict(tb_log_dict, step)
             train_tracker.reset_averages()
 
         if cfg.save_checkpoint and is_saving_step:
@@ -532,6 +553,9 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
                     wandb_log_dict = {**eval_tracker.to_dict(), **eval_info}
                     wandb_logger.log_dict(wandb_log_dict, step, mode="eval")
                     wandb_logger.log_video(eval_info["overall"]["video_paths"][0], step, mode="eval")
+                if tensorboard_logger:
+                    tb_log_dict = {**eval_tracker.to_dict(), **eval_info}
+                    tensorboard_logger.log_dict(tb_log_dict, step, mode="eval")
 
             accelerator.wait_for_everyone()
 
