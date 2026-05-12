@@ -177,3 +177,4 @@ outputs/
 *.xml
 *.part
 .claude
+hf_cache/*

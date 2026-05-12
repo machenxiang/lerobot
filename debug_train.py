@@ -14,7 +14,7 @@ RESUME = True  # True=从本地模型继续训练, False=从头开始训练
 
 # 继续训练时使用的 checkpoint 路径
 RESUME_CHECKPOINT_PATH = (
-    "outputs/smolvla_libero_finetune/checkpoints/020000/pretrained_model"
+    "outputs/smolvla_libero_finetune_0427/checkpoints/080000/pretrained_model"
 )
 # ============================================================
 
@@ -58,7 +58,7 @@ if __name__ == "__main__":
         # 从头开始训练
         sys.argv = [
             "debug_train.py",
-            "--policy.path=lerobot/smolvla_base",
+            "--policy.path=HuggingFaceVLA/smolvla_libero",
             "--policy.repo_id=mcx/smolvla_libero",
             "--policy.use_amp=true",
             "--dataset.repo_id=HuggingFaceVLA/libero",
@@ -67,12 +67,13 @@ if __name__ == "__main__":
             "--eval_freq=500",
             "--eval.n_episodes=10",
             "--eval.batch_size=10",
-            "--output_dir=outputs/smolvla_libero_finetune",
+            "--output_dir=outputs/smolvla_libero_finetune_0427",
             "--tensorboard.enable=true",
-            "--log_freq=100",
-            "--save_freq=2000",
+            "--log_freq=1000",
+            "--save_freq=20000",
             "--policy.push_to_hub=false",
-            """--rename_map={"observation.images.image": "observation.images.camera1", "observation.images.image2": "observation.images.camera2"}""",
+            # ,
+            # """--rename_map={"observation.images.image": "observation.images.camera1", "observation.images.image2": "observation.images.camera2"}""",
         ]
 
     print(f"Arguments: {sys.argv[1:]}")
